@@ -1,12 +1,7 @@
-// WebSocket, v1.00 2012-09-13
-//
-// Description: WebSocket RFC6544 codec, written in C++.
-// Homepage: http://katzarsky.github.com/WebSocket
-// Author: katzarsky@gmail.com
+
 
 #include "WebSocket.h"
 
-//#include "md5/md5.h"
 #include "base64/base64.h"
 #include "sha1/sha1.h"
 
@@ -18,9 +13,21 @@
 #include <random>
 #include <sstream> 
 
+using namespace std;
 
 static char const user_agent[] = "WebSocket++/0.8.2";
-using namespace std;
+
+union WsHead {
+	struct {
+		uint8_t OPCODE : 4;
+		uint8_t RSV : 3;
+		uint8_t FIN : 1; //1表示完整帧， 0表示部分帧
+
+		uint8_t payload_length7 : 7;
+		uint8_t MASK : 1;
+	};
+	uint16_t d;
+};
 class WsHandshake
 {
 	string resource;
@@ -202,12 +209,12 @@ string WsHandshake::AnswerHandshake()
 	//return WS_OPENING_FRAME;
 }
 
-void BaseWsSvr::Send(WebSocketFrameType frame_type, unsigned char* msg, int msg_length)
+void BaseWsSvr::Send(uint8_t opcode, unsigned char* msg, int msg_length)
 {
 	unsigned char buffer[50];
 	int pos = 0;
 	int size = msg_length; 
-	buffer[pos++] = (unsigned char)frame_type; // text frame
+	buffer[pos++] = (unsigned char)opcode; // text frame
 
 	if(size <= 125) {
 		buffer[pos++] = size;
@@ -238,30 +245,33 @@ void BaseWsSvr::Send(WebSocketFrameType frame_type, unsigned char* msg, int msg_
 	OnSendBuf(msg, size);
 }
 
-WsFrameRet BaseWsSvr::GetFrame(uint8_t* in_buffer, size_t in_length, size_t* frameLen)
+WsFrameRet BaseWsSvr::GetFrame(uint8_t* in_buffer, size_t in_length, size_t &frameLen)
 {
-	uint8_t out_buffer[1024 * 10];
-	size_t out_size = sizeof(out_buffer);
 	//printf("getTextFrame()\n");
 	if(in_length < 3) return WsFrameRet::INCOMPLETE_LEN;
 
-	unsigned char msg_opcode = in_buffer[0] & 0x0F;
-	unsigned char msg_fin = (in_buffer[0] >> 7) & 0x01;
-	unsigned char msg_masked = (in_buffer[1] >> 7) & 0x01;
+	WsHead *pHead = (WsHead *)&in_buffer[0];
+	//unsigned char msg_opcode = in_buffer[0] & 0x0F;
+	//unsigned char msg_fin = (in_buffer[0] >> 7) & 0x01;
+	//unsigned char msg_masked = (in_buffer[1] >> 7) & 0x01;
 
+	//printf("%x %x", in_buffer[0], in_buffer[1]); //82  1000 0010 | 83 1000 0011
+	//printf("\n%d %d %d %d", pHead->FIN, pHead->RSV, pHead->OPCODE, pHead->MASK pHead->payload_length7);//0 1 8 1
+	//printf("\n%d %d\n", pHead->MASK, pHead->MASK);
+	
 	// *** message decoding 
 
 	size_t payload_length = 0;
 	int pos = 2;
-	int length_field = in_buffer[1] & (~0x80);
+	//int length_field = in_buffer[1] & (~0x80);
 	unsigned int mask = 0;
 
 	//printf("IN:"); for(int i=0; i<20; i++) printf("%02x ",buffer[i]); printf("\n");
 
-	if(length_field <= 125) {
-		payload_length = length_field;
+	if(pHead->payload_length7 <= 125) {
+		payload_length = pHead->payload_length7;
 	}
-	else if(length_field == 126) { //msglen is 16bit!
+	else if(pHead->payload_length7 == 126) { //msglen is 16bit!
 
 		if (in_length < 4) return WsFrameRet::INCOMPLETE_LEN;
 		//payload_length = in_buffer[2] + (in_buffer[3]<<8);
@@ -271,7 +281,7 @@ WsFrameRet BaseWsSvr::GetFrame(uint8_t* in_buffer, size_t in_length, size_t* fra
 		);
 		pos += 2;
 	}
-	else if (length_field == 127) { //msglen is 64bit!
+	else if (pHead->payload_length7 == 127) { //msglen is 64bit!
 		if (in_length < 10) return WsFrameRet::INCOMPLETE_LEN;
 		payload_length = (uint32_t)(
 			((uint64_t)(in_buffer[2]) << 56) |
@@ -285,50 +295,54 @@ WsFrameRet BaseWsSvr::GetFrame(uint8_t* in_buffer, size_t in_length, size_t* fra
 		); 
 		pos += 8;
 	}
-		
-	//printf("PAYLOAD_LEN: %08x\n", payload_length);
+	
+	frameLen = payload_length + pos + 4; //加mask 4 字节
+	//printf("payload_length=%ld pos=%d\n", payload_length, pos);
 	if(in_length < payload_length+pos) {
 		return WsFrameRet::INCOMPLETE_FRAME;
 	}
 
-	if(msg_masked) {
-		mask = *((unsigned int*)(in_buffer+pos));
-		//printf("MASK: %08x\n", mask);
-		pos += 4;
-
-		// unmask data:
-		unsigned char* c = in_buffer+pos;
-		for(size_t i=0; i<payload_length; i++) {
-			c[i] = c[i] ^ ((unsigned char*)(&mask))[i%4];
-		}
-	}
-	else {
+	if (!pHead->MASK) {
 		OnError("message from client not masked");
 		return WsFrameRet::ERROR;
 	}
-	
+	mask = *((unsigned int*)(in_buffer+pos));
+	//printf("MASK: %08x\n", mask);
+	pos += 4;
+
+
+	uint8_t out_buffer[MAX_FRAME_LEN];
+	size_t out_size = sizeof(out_buffer);
 	if (payload_length > out_size) {
+		OnError("message from client not masked");
 		return WsFrameRet::ERROR;
 	}
-
-	memcpy((void*)out_buffer, (void*)(in_buffer+pos), payload_length);
-	out_buffer[payload_length] = 0;
-
-	size_t out_buffer_len = payload_length;
-	*frameLen = payload_length+ pos;
-	
-	//printf("TEXT: %s\n", out_buffer);
+	// unmask data:
+	unsigned char* c = in_buffer+pos;
+	for(size_t i=0; i<payload_length; i++) {
+		out_buffer[i] = c[i] ^ ((unsigned char*)(&mask))[i%4];
+	}
 	WebSocketFrameType type;
-	if(msg_opcode == 0x0)	   type = (msg_fin)?TEXT_FRAME:INCOMPLETE_TEXT_FRAME; // continuation frame ?
-	else if(msg_opcode == 0x1) type = (msg_fin)?TEXT_FRAME:INCOMPLETE_TEXT_FRAME;
-	else if(msg_opcode == 0x2) type = (msg_fin)?BINARY_FRAME:INCOMPLETE_BINARY_FRAME;
-	else if(msg_opcode == 0x9) type = PING_FRAME;
-	else if(msg_opcode == 0xA) type = PONG_FRAME;
+	if(pHead->OPCODE == 0x0)	  type = (pHead->FIN)?TEXT_FRAME:INCOMPLETE_TEXT_FRAME; // continuation frame ?
+	else if(pHead->OPCODE == 0x1) type = (pHead->FIN)?TEXT_FRAME:INCOMPLETE_TEXT_FRAME;
+	else if(pHead->OPCODE == 0x2) type = (pHead->FIN)?BINARY_FRAME:INCOMPLETE_BINARY_FRAME;
+	else if (pHead->OPCODE == 0x9)
+	{
+		type = PING_FRAME;
+		OnRevPing();
+		Send(PONG_FRAME, NULL, 0);
+		return WsFrameRet::COMPLITE;
+	}
+	else if (pHead->OPCODE == 0xA) {
+		type = PONG_FRAME;
+		OnRevPong();
+		return WsFrameRet::COMPLITE;
+	}
 	else
 	{
 		return WsFrameRet::ERROR;
 	}
-	OnRevMsg(type, out_buffer, out_buffer_len);
+	OnRevMsg(type, out_buffer, payload_length);
 	return WsFrameRet::COMPLITE;
 }
 
@@ -377,14 +391,10 @@ WsFrameRet BaseWsSvr::RevFrameBuf(uint8_t *in, size_t len, size_t &frameLen)
 		return WsFrameRet::ERROR;
 	} 
 
-	size_t outLen = 0;
-	WsFrameRet ret = GetFrame(in, len, &outLen);
-	if (ret == WsFrameRet::COMPLITE)
+	WsFrameRet ret = GetFrame(in, len, frameLen);
+	if (ret == WsFrameRet::ERROR)
 	{
-		frameLen = outLen;
-	}else if (ret == WsFrameRet::ERROR)
-	{
-		OnError("error frame");
+		OnError("svr rev error frame\n");
 	}
 	return ret;
 }
@@ -502,7 +512,7 @@ WsFrameRet BaseWsClient::RevFrameBuf(uint8_t *in, size_t len, size_t &frameLen)
 	WsFrameRet ret = GetFrame(in, len, frameLen);
 	if (ret == WsFrameRet::ERROR)
 	{
-		OnError("error frame");
+		OnError("client rev error frame\n");
 	}
 	return ret;
 }
@@ -563,22 +573,21 @@ WsFrameRet BaseWsClient::GetFrame(uint8_t* in_buffer, size_t in_length, size_t &
 	//printf("getTextFrame()\n");
 	if (in_length < 3) return WsFrameRet::INCOMPLETE_LEN;
 
-	unsigned char msg_opcode = in_buffer[0] & 0x0F;
-	unsigned char msg_fin = (in_buffer[0] >> 7) & 0x01;
-	unsigned char msg_masked = (in_buffer[1] >> 7) & 0x01;
+	WsHead *pHead = (WsHead*)in_buffer;
+	//pHead->FIN, pHead->RSV, pHead->OPCODE, pHead->MASK pHead->payload_length7
+
 
 	// *** message decoding 
 
 	size_t payload_length = 0;
 	int pos = 2;
-	int length_field = in_buffer[1] & (~0x80);
 
 	//printf("IN:"); for(int i=0; i<20; i++) printf("%02x ",buffer[i]); printf("\n");
 
-	if (length_field <= 125) {
-		payload_length = length_field;
+	if (pHead->payload_length7 <= 125) {
+		payload_length = pHead->payload_length7;
 	}
-	else if (length_field == 126) { //msglen is 16bit!
+	else if (pHead->payload_length7 == 126) { //msglen is 16bit!
 
 		if (in_length < 4) return WsFrameRet::INCOMPLETE_LEN;
 		//payload_length = in_buffer[2] + (in_buffer[3]<<8);
@@ -588,7 +597,7 @@ WsFrameRet BaseWsClient::GetFrame(uint8_t* in_buffer, size_t in_length, size_t &
 			);
 		pos += 2;
 	}
-	else if (length_field == 127) { //msglen is 64bit!
+	else if (pHead->payload_length7 == 127) { //msglen is 64bit!
 		if (in_length < 10) return WsFrameRet::INCOMPLETE_LEN;
 		payload_length = (uint32_t)(
 			((uint64_t)(in_buffer[2]) << 56) |
@@ -603,39 +612,54 @@ WsFrameRet BaseWsClient::GetFrame(uint8_t* in_buffer, size_t in_length, size_t &
 		pos += 8;
 	}
 
+	frameLen = payload_length + pos;
 	//printf("PAYLOAD_LEN: %08x\n", payload_length);
 	if (in_length < payload_length + pos) {
 		return WsFrameRet::INCOMPLETE_FRAME;
 	}
 
-	if (msg_masked) {
+	if (pHead->MASK) {
 		OnError("message from svr have masked\n");
 		return WsFrameRet::ERROR;
 	}
 
 	WebSocketFrameType type;
-	if (msg_opcode == 0x0)	   type = (msg_fin) ? TEXT_FRAME : INCOMPLETE_TEXT_FRAME; // continuation frame ?
-	else if (msg_opcode == 0x1) type = (msg_fin) ? TEXT_FRAME : INCOMPLETE_TEXT_FRAME;
-	else if (msg_opcode == 0x2) type = (msg_fin) ? BINARY_FRAME : INCOMPLETE_BINARY_FRAME;
-	else if (msg_opcode == 0x9) type = PING_FRAME;
-	else if (msg_opcode == 0xA) type = PONG_FRAME;
+	if (pHead->OPCODE == 0x0)	   type = (pHead->FIN) ? TEXT_FRAME : INCOMPLETE_TEXT_FRAME; // continuation frame ?
+	else if (pHead->OPCODE == 0x1) type = (pHead->FIN) ? TEXT_FRAME : INCOMPLETE_TEXT_FRAME;
+	else if (pHead->OPCODE == 0x2) type = (pHead->FIN) ? BINARY_FRAME : INCOMPLETE_BINARY_FRAME;
+	else if (pHead->OPCODE == 0x9) 
+	{
+		type = PING_FRAME;
+		OnRevPing();
+		Send(PONG_FRAME, NULL, 0);
+		return WsFrameRet::COMPLITE;
+	}
+	else if (pHead->OPCODE == 0xA) {
+		type = PONG_FRAME;
+		OnRevPong();
+		return WsFrameRet::COMPLITE;
+	}
 	else
 	{
 		return WsFrameRet::ERROR;
 	}
 	OnRevMsg(type, (in_buffer + pos), payload_length);
-	frameLen = payload_length + pos;
 	return WsFrameRet::COMPLITE;
 }
 
 
 
-void BaseWsClient::Send(WebSocketFrameType frame_type, unsigned char* msg, size_t msg_length)
+void BaseWsClient::Send(uint8_t opcode, const unsigned char* msg, size_t msg_len)
 {
-	unsigned char buffer[1024*5];
+	//WsHead head;
+	//head.d = 0;
+	//head.OPCODE |= 
+
+	unsigned char buffer[1024];
 	int pos = 0;
-	int size = msg_length;
-	buffer[pos++] = (unsigned char)frame_type; // text frame
+	int size = msg_len;
+
+	buffer[pos++] = (unsigned char)opcode; // text frame
 
 	if (size <= 125) {
 		buffer[pos++] = size;
@@ -672,17 +696,19 @@ void BaseWsClient::Send(WebSocketFrameType frame_type, unsigned char* msg, size_
 
 	for (std::size_t c = 0; c < 4; c++)
 		buffer[pos++] = mask[c];
-
+	//printf("OnSendBuf pos=%d\n", pos);
 	OnSendBuf(buffer, pos);
 
 	pos = 0;
-	if (msg_length >= sizeof(buffer))
+	for (std::size_t c = 0; c < msg_len; c++)
 	{
-		OnError("msg is too long");
-		return;
-	}
-	for (std::size_t c = 0; c < msg_length; c++)
 		buffer[pos++] = msg[c] ^ mask[c % 4];
-
-	OnSendBuf(buffer, msg_length);
+		if (pos == sizeof(buffer))
+		{
+			OnSendBuf(buffer, pos);
+			pos = 0;
+		}
+	}
+	OnSendBuf(buffer, pos);
+	//printf("OnSendBuf msg_length=%ld\n", msg_len);
 }

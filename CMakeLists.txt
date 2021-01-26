@@ -46,7 +46,8 @@ SET(EXECUTABLE_OUTPUT_PATH ${CMAKE_SOURCE_DIR}/bin)
 SET(LIBRARY_OUTPUT_PATH ${CMAKE_SOURCE_DIR}/lib)
 
 
-ADD_SUBDIRECTORY(src)
+ADD_SUBDIRECTORY(src/ws)
+ADD_SUBDIRECTORY(src/test)
 
 #自定义命令
 ##################################

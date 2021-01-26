@@ -44,7 +44,7 @@ enum class WsFrameRet {
 
 //using OnMsgCb = std::function<void(WebSocketFrameType type, const uint8_t *msg, size_t len)>;
 //using OnErrCb = std::function<void(const char *errInfo)>;
-
+const size_t MAX_FRAME_LEN = 1024 * 10; //server 最大接收帧长度
 class BaseWsSvr
 {
 	bool m_isConnect = false; //true表示通过 ws握手协议
@@ -53,18 +53,22 @@ public:
 	//接收握手协议
 	void RevHandshakeBuf(uint8_t *in, size_t len);
 	//接收数据帧消息，会修改in指向内存
-	//@param frameLen 接收完整的情况，处理完in长度. 通常用来等消息处理完，释放来源 in内存
+	//@param frameLen return COMPLITE 的情况，表示处理完in长度. 通常用来释放来源 in内存用
+	//			      return INCOMPLETE_FRAME 的情况，表示 in需要多少字节才能完成一帧处理。 通常用来控制等in接收完整再调用本函数，提高效率。
 	WsFrameRet RevFrameBuf(uint8_t *in, size_t len, size_t &frameLen);
-	void Send(WebSocketFrameType frame_type, unsigned char* msg, int msg_len);
+	void Send(uint8_t opcode, unsigned char* msg, int msg_len);
 	inline bool IsCon() { return m_isConnect; }
-
+	 
 protected:
 	virtual void OnRevMsg(WebSocketFrameType type, const uint8_t *msg, size_t len) = 0;
 	virtual void OnSendBuf(const uint8_t *buf, size_t len) = 0;
 	virtual void OnError(const char *errInfo);
+	virtual void OnRevPing(){};
+	virtual void OnRevPong(){};
+
 
 private:
-	WsFrameRet GetFrame(uint8_t* in_buffer, size_t in_length, size_t*frameLen);
+	WsFrameRet GetFrame(uint8_t* in_buffer, size_t in_length, size_t &frameLen);
 };
 
 class BaseWsClient
@@ -76,9 +80,11 @@ public:
 	void SendHandshakeReq(const string &path, const string &host);
 	//接收握手协议
 	void RevHandshakeBuf(uint8_t *in, size_t len);
-	void Send(WebSocketFrameType frame_type, unsigned char* msg, size_t msg_len);
+	//@param Send 
+	void Send(uint8_t opcode, const unsigned char* msg, size_t msg_len);
 	//接收数据帧消息，会修改in指向内存
-	//@param frameLen 接收完整的情况，处理完in长度. 通常用来等消息处理完，释放来源 in内存
+	//@param frameLen return COMPLITE 的情况，表示处理完in长度. 通常用来释放来源 in内存用
+	//			      return INCOMPLETE_FRAME 的情况，表示 in需要多少字节才能完成一帧处理。 通常用来控制等in接收完整再调用本函数，提高效率。
 	WsFrameRet RevFrameBuf(uint8_t *in, size_t len, size_t &frameLen);
 	inline bool IsCon() { return m_isConnect; }
 
@@ -87,6 +93,8 @@ protected:
 	virtual void OnRevMsg(WebSocketFrameType type, const uint8_t *msg, size_t len) = 0;
 	virtual void OnSendBuf(const uint8_t *buf, size_t len) = 0;
 	virtual void OnError(const char *errInfo);
+	virtual void OnRevPing() {};
+	virtual void OnRevPong() {};
 
 private:
 	WsFrameRet GetFrame(uint8_t* in_buffer, size_t in_length, size_t &frameLen);
