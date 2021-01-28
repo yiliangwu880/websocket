@@ -45,7 +45,7 @@ public:
 	 * @param input_len .in. length of input frame
 	 * @return [WS_INCOMPLETE_FRAME, WS_ERROR_FRAME, WS_OPENING_FRAME]
 	 */
-	WebSocketFrameType ParseHandshake(const unsigned char* input_frame, int input_len, string &rsp);
+	WebSocketFrameType ParseHandshake(const char* input_frame, int input_len, string &rsp);
 
 private:
 	string AnswerHandshake();
@@ -58,7 +58,7 @@ WsHandshake::WsHandshake() {
 	
 }
 
-WebSocketFrameType WsHandshake::ParseHandshake(const unsigned char* input_frame, int input_len, string &rsp)
+WebSocketFrameType WsHandshake::ParseHandshake(const char* input_frame, int input_len, string &rsp)
 {
 	if (0 != memcmp(&input_frame[input_len-4], "\r\n\r\n", 4))
 	{
@@ -92,13 +92,14 @@ WebSocketFrameType WsHandshake::ParseHandshake(const unsigned char* input_frame,
 				string header_key(header, 0, pos);
 				string header_value(header, pos+1);
 				header_value = Trim(header_value);
-				if(header_key == "Host") this->host = header_value;
-				else if(header_key == "Origin") this->origin = header_value;
-				else if(header_key == "Sec-WebSocket-Key") this->key = header_value;
-				else if(header_key == "Sec-WebSocket-Protocol") this->protocol = header_value;
+				if(strcasecmp(header_key.c_str(), "Host") == 0) this->host = header_value;
+				else if(strcasecmp(header_key.c_str(), "Origin") == 0) this->origin = header_value;
+				else if(strcasecmp(header_key.c_str(), "Sec-WebSocket-Key") == 0) this->key = header_value;
+				else if(strcasecmp(header_key.c_str(), "Sec-WebSocket-Protocol") == 0) this->protocol = header_value;
 			}
 		}
 	}
+
 
 	//this->key = "dGhlIHNhbXBsZSBub25jZQ==";
 	//printf("PARSED_KEY:%s \n", this->key.data());
@@ -209,9 +210,9 @@ string WsHandshake::AnswerHandshake()
 	//return WS_OPENING_FRAME;
 }
 
-void BaseWsSvr::Send(uint8_t opcode, unsigned char* msg, int msg_length)
+void BaseWsSvr::Send(uint8_t opcode, const char* msg, int msg_length)
 {
-	unsigned char buffer[50];
+	char buffer[50];
 	int pos = 0;
 	int size = msg_length; 
 	buffer[pos++] = (unsigned char)opcode; // text frame
@@ -245,7 +246,7 @@ void BaseWsSvr::Send(uint8_t opcode, unsigned char* msg, int msg_length)
 	OnSendBuf(msg, size);
 }
 
-WsFrameRet BaseWsSvr::GetFrame(uint8_t* in_buffer, size_t in_length, size_t &frameLen)
+WsFrameRet BaseWsSvr::GetFrame(const char* in_buffer, size_t in_length, size_t &frameLen)
 {
 	//printf("getTextFrame()\n");
 	if(in_length < 3) return WsFrameRet::INCOMPLETE_LEN;
@@ -311,14 +312,14 @@ WsFrameRet BaseWsSvr::GetFrame(uint8_t* in_buffer, size_t in_length, size_t &fra
 	pos += 4;
 
 
-	uint8_t out_buffer[MAX_FRAME_LEN];
+	char out_buffer[MAX_FRAME_LEN];
 	size_t out_size = sizeof(out_buffer);
 	if (payload_length > out_size) {
 		OnError("message from client not masked");
 		return WsFrameRet::ERROR;
 	}
 	// unmask data:
-	unsigned char* c = in_buffer+pos;
+	const char* c = in_buffer+pos;
 	for(size_t i=0; i<payload_length; i++) {
 		out_buffer[i] = c[i] ^ ((unsigned char*)(&mask))[i%4];
 	}
@@ -349,7 +350,7 @@ WsFrameRet BaseWsSvr::GetFrame(uint8_t* in_buffer, size_t in_length, size_t &fra
 
 
 
-void BaseWsSvr::RevHandshakeBuf(uint8_t *in, size_t len)
+void BaseWsSvr::RevHandshakeBuf(const char *in, size_t len)
 {
 	const size_t MAX_STR_LEN = 5000; //最大解析长度，超了认为错误
 	if (m_isConnect)
@@ -379,11 +380,11 @@ void BaseWsSvr::RevHandshakeBuf(uint8_t *in, size_t len)
 		OnError("parse handshake error");
 		return;
 	}
-	OnSendBuf((const uint8_t *)rsp.c_str(), rsp.length());
+	OnSendBuf(rsp.c_str(), rsp.length());
 	m_isConnect = true;
 }
 
-WsFrameRet BaseWsSvr::RevFrameBuf(uint8_t *in, size_t len, size_t &frameLen)
+WsFrameRet BaseWsSvr::RevFrameBuf(const char *in, size_t len, size_t &frameLen)
 {
 	if (!m_isConnect)
 	{
@@ -428,29 +429,31 @@ void BaseWsClient::SendHandshakeReq(const string &path, const string &host)
 	//	request << header_field.first << ": " << header_field.second << "\r\n";
 	request << "\r\n";
 	string s = request.str();
-	OnSendBuf((const uint8_t*)s.c_str(), s.length());
+	OnSendBuf(s.c_str(), s.length());
 }
 
-void BaseWsClient::RevHandshakeBuf(uint8_t *in, size_t len)
+bool BaseWsClient::RevHandshakeBuf(const char *in, size_t len)
 {
+	bool ret = false;
 	const size_t MAX_STR_LEN = 5000; //最大解析长度，超了认为错误
 	if (m_isConnect)
 	{
 		OnError("already handshake. repeated call RevHandshakeBuf");
-		return;
+		return ret;
 	}
 	if (len < 4)
 	{
-		return;
+		return ret;
 	}
 	if (len >= MAX_STR_LEN)
 	{
 		OnError("parse handshake str is too long");
-		return;
+		return ret;
 	}
 	if (0 != memcmp(&in[len - 4], "\r\n\r\n", 4))
 	{
-		return;
+		printf("no \r\n\r\n");
+		return ret;
 	}
 
 	// 1. copy char*/len into string
@@ -465,7 +468,7 @@ void BaseWsClient::RevHandshakeBuf(uint8_t *in, size_t len)
 			string header_key(header, 0, pos);
 			string header_value(header, pos + 1);
 			header_value = Trim(header_value);
-			if (header_key == "Sec-WebSocket-Accept")
+			if (strcasecmp(header_key.c_str(), "Sec-WebSocket-Accept") == 0)
 			{
 
 				unsigned char digest[20]; // 160 bit sha1 digest
@@ -490,6 +493,7 @@ void BaseWsClient::RevHandshakeBuf(uint8_t *in, size_t len)
 				{
 					m_isConnect = true;
 					OnConnect();
+					return true;
 				}
 				else
 				{
@@ -498,9 +502,10 @@ void BaseWsClient::RevHandshakeBuf(uint8_t *in, size_t len)
 			}
 		}
 	}
+	return false;
 }
 
-WsFrameRet BaseWsClient::RevFrameBuf(uint8_t *in, size_t len, size_t &frameLen)
+WsFrameRet BaseWsClient::RevFrameBuf(const char *in, size_t len, size_t &frameLen)
 {
 	if (!m_isConnect)
 	{
@@ -568,7 +573,7 @@ void BaseWsClient::OnError(const char *errInfo)
 	printf(errInfo);
 }
 
-WsFrameRet BaseWsClient::GetFrame(uint8_t* in_buffer, size_t in_length, size_t &frameLen)
+WsFrameRet BaseWsClient::GetFrame(const char* in_buffer, size_t in_length, size_t &frameLen)
 {
 	//printf("getTextFrame()\n");
 	if (in_length < 3) return WsFrameRet::INCOMPLETE_LEN;
@@ -649,13 +654,13 @@ WsFrameRet BaseWsClient::GetFrame(uint8_t* in_buffer, size_t in_length, size_t &
 
 
 
-void BaseWsClient::Send(uint8_t opcode, const unsigned char* msg, size_t msg_len)
+void BaseWsClient::Send(uint8_t opcode, const char* msg, size_t msg_len)
 {
 	//WsHead head;
 	//head.d = 0;
 	//head.OPCODE |= 
 
-	unsigned char buffer[1024];
+	char buffer[1024];
 	int pos = 0;
 	int size = msg_len;
 

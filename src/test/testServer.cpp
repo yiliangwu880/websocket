@@ -19,15 +19,15 @@ public:
 	string m_frame; //接收 frame内容
 	WebSocketFrameType m_frameType; //接收 frame type
 	string m_sendBuf; //发送到网络的缓存
-	virtual void OnRevMsg(WebSocketFrameType type, const uint8_t *msg, size_t len) 
+	virtual void OnRevMsg(WebSocketFrameType type, const char *msg, size_t len) 
 	{
 		//printf("msg len=%ld\n", len);
-		m_frame.assign((const char*)msg, len);
+		m_frame.assign(msg, len);
 		m_frameType = type;
 	}
-	virtual void OnSendBuf(const uint8_t *buf, size_t len)
+	virtual void OnSendBuf(const char *buf, size_t len)
 	{
-		m_sendBuf.append((const char*)buf, len);
+		m_sendBuf.append(buf, len);
 	}
 };
 
@@ -43,27 +43,27 @@ public:
 	{
 		m_isCallOnCon = true;
 	}
-	virtual void OnRevMsg(WebSocketFrameType type, const uint8_t *msg, size_t len)
+	virtual void OnRevMsg(WebSocketFrameType type, const char *msg, size_t len)
 	{
-		m_frame.assign((const char*)msg, len);
+		m_frame.assign(msg, len);
 		m_frameType = type;
 	}
-	virtual void OnSendBuf(const uint8_t *buf, size_t len)
+	virtual void OnSendBuf(const char *buf, size_t len)
 	{
-		m_sendBuf.append((const char*)buf, len);
+		m_sendBuf.append(buf, len);
 	}
 };
 
 namespace{
-void PrintBinary2Hex(const string &bin)
-{
-	printf("\n");
-	for ( const char &v : bin)
-	{ 
-		printf("%x", (uint8_t)v);
-	}
-	printf("\n");
-}
+//void PrintBinary2Hex(const string &bin)
+//{
+//	printf("\n");
+//	for ( const char &v : bin)
+//	{ 
+//		printf("%x", (uint8_t)v);
+//	}
+//	printf("\n");
+//}
 }
 
 UNITTEST(basic_websocket_request)
@@ -75,7 +75,7 @@ UNITTEST(basic_websocket_request)
 	output += "\r\nUpgrade: websocket\r\n\r\n";
 
 	UNIT_ASSERT(!svr.IsCon());
-	svr.RevHandshakeBuf((uint8_t *)input.c_str(), input.length());
+	svr.RevHandshakeBuf(input.c_str(), input.length());
 
 	UNIT_ASSERT(svr.m_sendBuf == output);
 	UNIT_ASSERT(svr.IsCon());
@@ -87,10 +87,10 @@ UNITTEST(svrSendFrame)
 	TestClient client;
 
 	client.SendHandshakeReq("/", "www.example.com");
-	svr.RevHandshakeBuf((uint8_t *)client.m_sendBuf.c_str(), client.m_sendBuf.length());
+	svr.RevHandshakeBuf(client.m_sendBuf.c_str(), client.m_sendBuf.length());
 	UNIT_ASSERT(svr.IsCon());
 
-	client.RevHandshakeBuf((uint8_t *)svr.m_sendBuf.c_str(), svr.m_sendBuf.length());
+	client.RevHandshakeBuf(svr.m_sendBuf.c_str(), svr.m_sendBuf.length());
 	UNIT_ASSERT(client.IsCon());
 	UNIT_ASSERT(client.m_isCallOnCon);
 
@@ -99,10 +99,10 @@ UNITTEST(svrSendFrame)
 		client.m_sendBuf.clear();
 		string sendStr = "abc";
 		UNIT_INFO("sendStr = %s %d", sendStr.c_str(), sendStr.length());
-		client.Send(WebSocketFrameType::BINARY_FRAME, (uint8_t *)sendStr.c_str(), sendStr.length());
+		client.Send(WebSocketFrameType::BINARY_FRAME, sendStr.c_str(), sendStr.length());
 
 		size_t frameLen = 0;
-		WsFrameRet ret = svr.RevFrameBuf((uint8_t *)client.m_sendBuf.c_str(), client.m_sendBuf.length(), frameLen);
+		WsFrameRet ret = svr.RevFrameBuf(client.m_sendBuf.c_str(), client.m_sendBuf.length(), frameLen);
 		UNIT_INFO("%d %d", client.m_sendBuf.length(), frameLen);
 		UNIT_ASSERT(client.m_sendBuf.length() == frameLen);
 		UNIT_ASSERT(WsFrameRet::COMPLITE == ret);
@@ -113,10 +113,10 @@ UNITTEST(svrSendFrame)
 	{
 		client.m_sendBuf.clear();
 		string sendStr = "cc";
-		client.Send(WebSocketFrameType::BINARY_FRAME, (uint8_t *)sendStr.c_str(), sendStr.length());
+		client.Send(WebSocketFrameType::BINARY_FRAME, sendStr.c_str(), sendStr.length());
 
 		size_t frameLen = 0;
-		WsFrameRet ret = svr.RevFrameBuf((uint8_t *)client.m_sendBuf.c_str(), client.m_sendBuf.length(), frameLen);
+		WsFrameRet ret = svr.RevFrameBuf(client.m_sendBuf.c_str(), client.m_sendBuf.length(), frameLen);
 		UNIT_ASSERT(client.m_sendBuf.length() == frameLen);
 		UNIT_ASSERT(WsFrameRet::COMPLITE == ret);
 		UNIT_ASSERT(svr.m_frame == sendStr);
@@ -126,10 +126,10 @@ UNITTEST(svrSendFrame)
 	{
 		svr.m_sendBuf.clear();
 		string sendStr = "12";
-		svr.Send(WebSocketFrameType::TEXT_FRAME, (uint8_t *)sendStr.c_str(), sendStr.length());
+		svr.Send(WebSocketFrameType::TEXT_FRAME, sendStr.c_str(), sendStr.length());
 
 		size_t frameLen = 0;
-		WsFrameRet ret = client.RevFrameBuf((uint8_t *)svr.m_sendBuf.c_str(), svr.m_sendBuf.length(), frameLen);
+		WsFrameRet ret = client.RevFrameBuf(svr.m_sendBuf.c_str(), svr.m_sendBuf.length(), frameLen);
 		UNIT_ASSERT(svr.m_sendBuf.length() == frameLen);
 		UNIT_ASSERT(WsFrameRet::COMPLITE == ret);
 		UNIT_ASSERT(client.m_frame == sendStr);
@@ -138,10 +138,10 @@ UNITTEST(svrSendFrame)
 	{
 		svr.m_sendBuf.clear();
 		string sendStr = "123";
-		svr.Send(WebSocketFrameType::BINARY_FRAME, (uint8_t *)sendStr.c_str(), sendStr.length());
+		svr.Send(WebSocketFrameType::BINARY_FRAME, sendStr.c_str(), sendStr.length());
 
 		size_t frameLen = 0;
-		WsFrameRet ret = client.RevFrameBuf((uint8_t *)svr.m_sendBuf.c_str(), svr.m_sendBuf.length(), frameLen);
+		WsFrameRet ret = client.RevFrameBuf(svr.m_sendBuf.c_str(), svr.m_sendBuf.length(), frameLen);
 		UNIT_ASSERT(svr.m_sendBuf.length() == frameLen);
 		UNIT_ASSERT(WsFrameRet::COMPLITE == ret);
 		UNIT_ASSERT(client.m_frame == sendStr);
@@ -156,10 +156,10 @@ UNITTEST(Unpack)
 	TestClient client;
 
 	client.SendHandshakeReq("/", "www.example.com");
-	svr.RevHandshakeBuf((uint8_t *)client.m_sendBuf.c_str(), client.m_sendBuf.length());
+	svr.RevHandshakeBuf(client.m_sendBuf.c_str(), client.m_sendBuf.length());
 	UNIT_ASSERT(svr.IsCon());
 
-	client.RevHandshakeBuf((uint8_t *)svr.m_sendBuf.c_str(), svr.m_sendBuf.length());
+	client.RevHandshakeBuf(svr.m_sendBuf.c_str(), svr.m_sendBuf.length());
 	UNIT_ASSERT(client.IsCon());
 	UNIT_ASSERT(client.m_isCallOnCon);
 
@@ -168,10 +168,10 @@ UNITTEST(Unpack)
 	{
 		svr.m_sendBuf.clear();
 		string sendStr1 = "12";
-		svr.Send(WebSocketFrameType::TEXT_FRAME, (uint8_t *)sendStr1.c_str(), sendStr1.length());
+		svr.Send(WebSocketFrameType::TEXT_FRAME, sendStr1.c_str(), sendStr1.length());
 		size_t bufLen1 = svr.m_sendBuf.length();
 		string sendStr2 = "abc";
-		svr.Send(WebSocketFrameType::BINARY_FRAME, (uint8_t *)sendStr2.c_str(), sendStr2.length());
+		svr.Send(WebSocketFrameType::BINARY_FRAME, sendStr2.c_str(), sendStr2.length());
 		size_t bufLen2 = svr.m_sendBuf.length()- bufLen1;
 
 		unsigned seed = (uint32_t)time(0);
@@ -194,7 +194,7 @@ UNITTEST(Unpack)
 
 			const char *pBuf = svr.m_sendBuf.c_str();
 			size_t frameLen = 0;
-			WsFrameRet ret = client.RevFrameBuf((uint8_t *)pBuf, totalRevLen, frameLen);
+			WsFrameRet ret = client.RevFrameBuf(pBuf, totalRevLen, frameLen);
 			if (WsFrameRet::COMPLITE == ret)
 			{
 				UNIT_ASSERT(bufLen1 == frameLen || bufLen2 == frameLen);
@@ -216,10 +216,10 @@ UNITTEST(frameLen16bytes)
 	TestClient client;
 
 	client.SendHandshakeReq("/", "www.example.com");
-	svr.RevHandshakeBuf((uint8_t *)client.m_sendBuf.c_str(), client.m_sendBuf.length());
+	svr.RevHandshakeBuf(client.m_sendBuf.c_str(), client.m_sendBuf.length());
 	UNIT_ASSERT(svr.IsCon());
 
-	client.RevHandshakeBuf((uint8_t *)svr.m_sendBuf.c_str(), svr.m_sendBuf.length());
+	client.RevHandshakeBuf(svr.m_sendBuf.c_str(), svr.m_sendBuf.length());
 	UNIT_ASSERT(client.IsCon());
 	UNIT_ASSERT(client.m_isCallOnCon);
 
@@ -229,10 +229,10 @@ UNITTEST(frameLen16bytes)
 		string sendStr = "abc";
 		sendStr.append(1024, '0');
 		sendStr.append("e");
-		client.Send(WebSocketFrameType::BINARY_FRAME, (uint8_t *)sendStr.c_str(), sendStr.length());
+		client.Send(WebSocketFrameType::BINARY_FRAME, sendStr.c_str(), sendStr.length());
 
 		size_t frameLen = 0;
-		WsFrameRet ret = svr.RevFrameBuf((uint8_t *)client.m_sendBuf.c_str(), client.m_sendBuf.length(), frameLen);
+		WsFrameRet ret = svr.RevFrameBuf(client.m_sendBuf.c_str(), client.m_sendBuf.length(), frameLen);
 		UNIT_INFO("%d %d", client.m_sendBuf.length(), frameLen);
 		UNIT_ASSERT(client.m_sendBuf.length() == frameLen);
 		UNIT_ASSERT(WsFrameRet::COMPLITE == ret);
@@ -247,10 +247,10 @@ UNITTEST(frameLen16bytes)
 		string sendStr = "12";
 		sendStr.append(1024, '0');
 		sendStr.append("e");
-		svr.Send(WebSocketFrameType::TEXT_FRAME, (uint8_t *)sendStr.c_str(), sendStr.length());
+		svr.Send(WebSocketFrameType::TEXT_FRAME, sendStr.c_str(), sendStr.length());
 
 		size_t frameLen = 0;
-		WsFrameRet ret = client.RevFrameBuf((uint8_t *)svr.m_sendBuf.c_str(), svr.m_sendBuf.length(), frameLen);
+		WsFrameRet ret = client.RevFrameBuf(svr.m_sendBuf.c_str(), svr.m_sendBuf.length(), frameLen);
 		UNIT_ASSERT(svr.m_sendBuf.length() == frameLen);
 		UNIT_ASSERT(WsFrameRet::COMPLITE == ret);
 		UNIT_ASSERT(client.m_frame == sendStr);
