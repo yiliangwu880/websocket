@@ -17,6 +17,19 @@ using namespace std;
 
 static char const user_agent[] = "WebSocket++/0.8.2";
 
+namespace {
+	std::string BinaryToHex(const std::string &binaryStr)
+	{
+		string ret;
+		static const char *hex = "0123456789ABCDEF";
+		for (auto c : binaryStr)
+		{
+			ret.push_back(hex[(c >> 4) & 0xf]); //取二进制高四位
+			ret.push_back(hex[c & 0xf]);        //取二进制低四位
+		}
+		return ret;
+	}
+}
 union WsHead {
 	struct {
 		uint8_t OPCODE : 4;
@@ -507,18 +520,45 @@ bool BaseWsClient::RevHandshakeBuf(const char *in, size_t len)
 
 WsFrameRet BaseWsClient::RevFrameBuf(const char *in, size_t len, size_t &frameLen)
 {
+	if (len == 0)
+	{
+		return WsFrameRet::ERROR;
+	}
 	if (!m_isConnect)
 	{
 		OnError("have not  handshake.");
 		return WsFrameRet::ERROR;
 	}
 
-	frameLen = 0;
-	WsFrameRet ret = GetFrame(in, len, frameLen);
-	if (ret == WsFrameRet::ERROR)
+	size_t delBufLen = 0; //处理过，需要删除的长度
+	WsFrameRet ret;
+	while (true)
 	{
-		OnError("client rev error frame\n");
+		size_t frameLen = 0;
+		ret = GetFrame(in + delBufLen, len - delBufLen, frameLen);
+		if (ret == WsFrameRet::ERROR)
+		{
+			OnError("client rev error frame\n");
+			break;
+		}
+		else if (ret != WsFrameRet::COMPLITE)
+		{
+			break;
+		}
+		else if (ret == WsFrameRet::COMPLITE)
+		{
+			delBufLen += frameLen;
+			if (delBufLen == len)
+			{
+				break;
+			}
+			continue;
+		}
+
+		OnError("unknow error"); //未知流程错误
+		break;
 	}
+	frameLen = delBufLen;
 	return ret;
 }
 
@@ -575,19 +615,15 @@ void BaseWsClient::OnError(const char *errInfo)
 
 WsFrameRet BaseWsClient::GetFrame(const char* in_buffer, size_t in_length, size_t &frameLen)
 {
-	//printf("getTextFrame()\n");
-	if (in_length < 3) return WsFrameRet::INCOMPLETE_LEN;
+	if (in_length < 3)
+	{
+		return WsFrameRet::INCOMPLETE_LEN;
+	}
 
-	WsHead *pHead = (WsHead*)in_buffer;
-	//pHead->FIN, pHead->RSV, pHead->OPCODE, pHead->MASK pHead->payload_length7
-
-
-	// *** message decoding 
+	const WsHead *pHead = (const WsHead*)in_buffer;
 
 	size_t payload_length = 0;
 	int pos = 2;
-
-	//printf("IN:"); for(int i=0; i<20; i++) printf("%02x ",buffer[i]); printf("\n");
 
 	if (pHead->payload_length7 <= 125) {
 		payload_length = pHead->payload_length7;
@@ -595,30 +631,28 @@ WsFrameRet BaseWsClient::GetFrame(const char* in_buffer, size_t in_length, size_
 	else if (pHead->payload_length7 == 126) { //msglen is 16bit!
 
 		if (in_length < 4) return WsFrameRet::INCOMPLETE_LEN;
-		//payload_length = in_buffer[2] + (in_buffer[3]<<8);
-		payload_length = (
-			(in_buffer[2] << 8) |
-			(in_buffer[3])
+		payload_length = (uint16_t)(
+			((uint8_t)in_buffer[2] << 8) |
+			((uint8_t)in_buffer[3])
 			);
 		pos += 2;
 	}
 	else if (pHead->payload_length7 == 127) { //msglen is 64bit!
 		if (in_length < 10) return WsFrameRet::INCOMPLETE_LEN;
-		payload_length = (uint32_t)(
-			((uint64_t)(in_buffer[2]) << 56) |
-			((uint64_t)(in_buffer[3]) << 48) |
-			((uint64_t)(in_buffer[4]) << 40) |
-			((uint64_t)(in_buffer[5]) << 32) |
-			((uint64_t)(in_buffer[6]) << 24) |
-			((uint64_t)(in_buffer[7]) << 16) |
-			((uint64_t)(in_buffer[8]) << 8) |
-			((uint64_t)(in_buffer[9]))
+		payload_length = (uint64_t)(
+			((uint64_t)(uint8_t)(in_buffer[2]) << 56) |
+			((uint64_t)(uint8_t)(in_buffer[3]) << 48) |
+			((uint64_t)(uint8_t)(in_buffer[4]) << 40) |
+			((uint64_t)(uint8_t)(in_buffer[5]) << 32) |
+			((uint64_t)(uint8_t)(in_buffer[6]) << 24) |
+			((uint64_t)(uint8_t)(in_buffer[7]) << 16) |
+			((uint64_t)(uint8_t)(in_buffer[8]) << 8) |
+			((uint64_t)(uint8_t)(in_buffer[9]))
 			);
 		pos += 8;
 	}
 
 	frameLen = payload_length + pos;
-	//printf("PAYLOAD_LEN: %08x\n", payload_length);
 	if (in_length < payload_length + pos) {
 		return WsFrameRet::INCOMPLETE_FRAME;
 	}
@@ -646,6 +680,9 @@ WsFrameRet BaseWsClient::GetFrame(const char* in_buffer, size_t in_length, size_
 	}
 	else
 	{
+		char str[1000];
+		snprintf(str, sizeof(str), "pHead->OPCODE = %X buffer in_length=%ld\n", pHead->OPCODE, in_length);
+		OnError(str);
 		return WsFrameRet::ERROR;
 	}
 	OnRevMsg(type, (in_buffer + pos), payload_length);

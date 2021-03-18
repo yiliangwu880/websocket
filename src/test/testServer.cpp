@@ -37,6 +37,7 @@ public:
 	string m_frame; //接收 frame内容
 	WebSocketFrameType m_frameType; //接收 frame type
 	string m_sendBuf; //发送到网络的缓存
+	int m_revMsgNum = 0;
 
 	bool m_isCallOnCon = false;
 	virtual void OnConnect()
@@ -47,6 +48,7 @@ public:
 	{
 		m_frame.assign(msg, len);
 		m_frameType = type;
+		m_revMsgNum++;
 	}
 	virtual void OnSendBuf(const char *buf, size_t len)
 	{
@@ -169,10 +171,8 @@ UNITTEST(Unpack)
 		svr.m_sendBuf.clear();
 		string sendStr1 = "12";
 		svr.Send(WebSocketFrameType::TEXT_FRAME, sendStr1.c_str(), sendStr1.length());
-		size_t bufLen1 = svr.m_sendBuf.length();
 		string sendStr2 = "abc";
 		svr.Send(WebSocketFrameType::BINARY_FRAME, sendStr2.c_str(), sendStr2.length());
-		size_t bufLen2 = svr.m_sendBuf.length()- bufLen1;
 
 		unsigned seed = (uint32_t)time(0);
 		std::default_random_engine generator(seed);
@@ -197,18 +197,84 @@ UNITTEST(Unpack)
 			WsFrameRet ret = client.RevFrameBuf(pBuf, totalRevLen, frameLen);
 			if (WsFrameRet::COMPLITE == ret)
 			{
-				UNIT_ASSERT(bufLen1 == frameLen || bufLen2 == frameLen);
 				UNIT_ASSERT(client.m_frame == sendStr1 || client.m_frame == sendStr2);
 				UNIT_INFO("frame = %s", client.m_frame.c_str());
+			}	
+			if (frameLen != 0)
+			{
 				string remainBuf(svr.m_sendBuf.begin() + frameLen, svr.m_sendBuf.end());
 				svr.m_sendBuf = remainBuf;
 				UNIT_INFO("remainbuf len=", svr.m_sendBuf.length());
-			}	
+			}
 		}
 	}
+	UNIT_INFO("%d", client.m_revMsgNum);
+	UNIT_ASSERT(client.m_revMsgNum == 2);
 }
 
 
+//一次接收多个frame
+UNITTEST(revMoreFrame)
+{
+	TestSvr svr;
+	TestClient client;
+
+	client.SendHandshakeReq("/", "www.example.com");
+	svr.RevHandshakeBuf(client.m_sendBuf.c_str(), client.m_sendBuf.length());
+	UNIT_ASSERT(svr.IsCon());
+
+	client.RevHandshakeBuf(svr.m_sendBuf.c_str(), svr.m_sendBuf.length());
+	UNIT_ASSERT(client.IsCon());
+	UNIT_ASSERT(client.m_isCallOnCon);
+
+	//svr send
+	svr.m_sendBuf.clear();
+	//20个 frame
+	string sendStr1 = "12";
+	string sendStr2 = "abc";
+	for (int i = 0; i < 10 ; i++)
+	{
+		svr.Send(WebSocketFrameType::TEXT_FRAME, sendStr1.c_str(), sendStr1.length());
+		svr.Send(WebSocketFrameType::BINARY_FRAME, sendStr2.c_str(), sendStr2.length());
+	}
+	size_t totalLen = svr.m_sendBuf.length();
+	time_t cur;
+	time(&cur);
+	unsigned seed = (uint8_t)cur;
+	std::default_random_engine generator(seed);
+	std::uniform_int_distribution<int> distribution(1, 6);
+	size_t totalRevLen = 0;
+	for (int i = 0; i < 1000; i++)
+	{
+		if (0 == svr.m_sendBuf.length())
+		{
+			break;
+		}
+		size_t onceLen = distribution(generator)*totalLen / 6;  // generates number in the range [1,6]*totalLen/6
+		if (totalRevLen + onceLen >= svr.m_sendBuf.length())
+		{
+			onceLen = svr.m_sendBuf.length() - totalRevLen;
+		}
+		totalRevLen += onceLen;
+		UNIT_INFO("once_len=%d totalRevLen=%d total=%ld", onceLen, totalRevLen, svr.m_sendBuf.length());
+
+		const char *pBuf = svr.m_sendBuf.c_str();
+		size_t frameLen = 0;
+		WsFrameRet ret = client.RevFrameBuf(pBuf, totalRevLen, frameLen);
+		if (WsFrameRet::COMPLITE == ret)
+		{
+			UNIT_ASSERT(client.m_frame == sendStr1 || client.m_frame == sendStr2);
+		}
+		if (frameLen != 0)
+		{
+			string remainBuf(svr.m_sendBuf.begin() + frameLen, svr.m_sendBuf.end());
+			svr.m_sendBuf = remainBuf;
+			UNIT_INFO("remainbuf len=", svr.m_sendBuf.length());
+		}
+	}
+	UNIT_INFO("%d", client.m_revMsgNum);
+	UNIT_ASSERT(client.m_revMsgNum == 20);
+}
 //16字节长度frame
 UNITTEST(frameLen16bytes)
 {
